@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Kahootinho</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;700;800&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="bg-mesh" aria-hidden="true"></div>
+
+  <!-- HOME -->
+  <section id="screen-home" class="screen active">
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <span class="brand-name">Kahootinho</span>
+      </div>
+    </header>
+    <main class="home-hero">
+      <p class="eyebrow">Quiz ao vivo · estilo sala de aula</p>
+      <h1>Kahootinho</h1>
+      <p class="lead">Crie quizzes ou jogue a revisão pronta de Instalação e Manutenção de Microcomputadores.</p>
+      <div class="home-actions">
+        <button type="button" class="btn btn-primary" data-action="play-native">
+          Jogar quiz nativo
+        </button>
+        <button type="button" class="btn btn-secondary" data-action="go-create">
+          Criar manualmente
+        </button>
+        <button type="button" class="btn btn-ghost" data-action="go-library">
+          Meus quizzes
+        </button>
+        <button type="button" class="btn btn-ghost" data-action="go-join">
+          Entrar com PIN
+        </button>
+      </div>
+      <p class="native-hint">Quiz nativo: 24 questões · tempo sugerido 30s</p>
+    </main>
+  </section>
+
+  <!-- LIBRARY -->
+  <section id="screen-library" class="screen">
+    <header class="topbar">
+      <button type="button" class="btn-icon" data-action="go-home" aria-label="Voltar">←</button>
+      <h2 class="topbar-title">Meus quizzes</h2>
+      <button type="button" class="btn btn-sm btn-primary" data-action="go-create">Novo</button>
+    </header>
+    <main class="panel">
+      <article class="quiz-card native-card">
+        <div>
+          <span class="badge">Nativo</span>
+          <h3>Instalação e Manutenção de Microcomputadores</h3>
+          <p>24 questões prontas a partir do material de revisão.</p>
+        </div>
+        <div class="quiz-card-actions">
+          <button type="button" class="btn btn-primary btn-sm" data-action="host-native">Apresentar</button>
+          <button type="button" class="btn btn-secondary btn-sm" data-action="solo-native">Solo</button>
+        </div>
+      </article>
+      <div id="custom-quiz-list" class="quiz-list"></div>
+      <p id="library-empty" class="empty-state hidden">Nenhum quiz manual ainda. Crie o primeiro!</p>
+    </main>
+  </section>
+
+  <!-- CREATE -->
+  <section id="screen-create" class="screen">
+    <header class="topbar">
+      <button type="button" class="btn-icon" data-action="go-library" aria-label="Voltar">←</button>
+      <h2 class="topbar-title">Criar quiz</h2>
+      <button type="button" class="btn btn-sm btn-primary" id="btn-save-quiz">Salvar</button>
+    </header>
+    <main class="panel create-panel">
+      <label class="field">
+        <span>Título</span>
+        <input id="quiz-title" type="text" maxlength="120" placeholder="Ex.: Redes e TCP/IP" />
+      </label>
+      <label class="field">
+        <span>Descrição (opcional)</span>
+        <input id="quiz-desc" type="text" maxlength="200" placeholder="Breve resumo" />
+      </label>
+      <label class="field field-inline">
+        <span>Tempo por pergunta (segundos)</span>
+        <input id="quiz-time" type="number" min="5" max="120" value="30" />
+      </label>
+      <div id="questions-editor" class="questions-editor"></div>
+      <button type="button" class="btn btn-secondary" id="btn-add-question">+ Adicionar pergunta</button>
+    </main>
+  </section>
+
+  <!-- JOIN -->
+  <section id="screen-join" class="screen">
+    <header class="topbar">
+      <button type="button" class="btn-icon" data-action="go-home" aria-label="Voltar">←</button>
+      <h2 class="topbar-title">Entrar no jogo</h2>
+      <span></span>
+    </header>
+    <main class="panel join-panel">
+      <label class="field">
+        <span>PIN do jogo</span>
+        <input id="join-pin" type="text" inputmode="numeric" maxlength="6" placeholder="000000" />
+      </label>
+      <label class="field">
+        <span>Seu apelido</span>
+        <input id="join-nick" type="text" maxlength="16" placeholder="Ex.: Ana" />
+      </label>
+      <button type="button" class="btn btn-primary" id="btn-join-game">Entrar</button>
+      <p class="hint">Abra outra aba no mesmo computador para apresentar e jogar juntos (modo local).</p>
+    </main>
+  </section>
+
+  <!-- LOBBY (HOST) -->
+  <section id="screen-lobby" class="screen">
+    <header class="topbar">
+      <button type="button" class="btn-icon" data-action="end-game" aria-label="Sair">←</button>
+      <h2 class="topbar-title" id="lobby-title">Lobby</h2>
+      <span></span>
+    </header>
+    <main class="lobby">
+      <div class="pin-box">
+        <p>PIN do jogo</p>
+        <p class="pin-code" id="lobby-pin">------</p>
+        <p class="hint">Jogadores entram em “Entrar com PIN” nesta mesma máquina/navegador.</p>
+      </div>
+      <div class="players-box">
+        <h3>Jogadores (<span id="player-count">0</span>)</h3>
+        <ul id="player-list" class="player-list"></ul>
+      </div>
+      <div class="lobby-actions">
+        <button type="button" class="btn btn-primary" id="btn-start-game" disabled>Iniciar</button>
+        <button type="button" class="btn btn-ghost" id="btn-add-local-player">Adicionar jogador local</button>
+      </div>
+    </main>
+  </section>
+
+  <!-- PLAYER WAITING -->
+  <section id="screen-waiting" class="screen">
+    <main class="waiting">
+      <div class="brand brand-lg">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <span class="brand-name">Kahootinho</span>
+      </div>
+      <h2 id="waiting-nick">Olá!</h2>
+      <p>Aguardando o apresentador iniciar…</p>
+      <div class="pulse-dot" aria-hidden="true"></div>
+    </main>
+  </section>
+
+  <!-- HOST QUESTION -->
+  <section id="screen-host-question" class="screen">
+    <header class="game-bar">
+      <span id="hq-progress">1 / 24</span>
+      <div class="timer-wrap">
+        <div class="timer-ring" id="hq-timer-ring"></div>
+        <span id="hq-timer">30</span>
+      </div>
+      <span id="hq-answers-count">0 respostas</span>
+    </header>
+    <main class="host-q">
+      <h2 id="hq-text">Pergunta</h2>
+      <div class="answer-grid host-answers" id="hq-answers"></div>
+      <button type="button" class="btn btn-secondary" id="btn-skip-timer">Revelar agora</button>
+    </main>
+  </section>
+
+  <!-- PLAYER ANSWER -->
+  <section id="screen-player-answer" class="screen">
+    <header class="game-bar compact">
+      <span id="pa-progress">1 / 24</span>
+      <span id="pa-timer">30</span>
+    </header>
+    <main class="player-answer">
+      <p class="player-prompt">Escolha sua resposta</p>
+      <div class="answer-grid player-answers" id="pa-answers"></div>
+      <p id="pa-locked" class="locked-msg hidden">Resposta enviada!</p>
+    </main>
+  </section>
+
+  <!-- REVEAL / LEADERBOARD -->
+  <section id="screen-reveal" class="screen">
+    <main class="reveal-panel">
+      <p class="eyebrow" id="reveal-status">Resposta correta</p>
+      <h2 id="reveal-text">Pergunta</h2>
+      <div class="answer-grid host-answers" id="reveal-answers"></div>
+      <div class="leaderboard" id="leaderboard"></div>
+      <button type="button" class="btn btn-primary" id="btn-next-question">Próxima</button>
+    </main>
+  </section>
+
+  <!-- PLAYER RESULT FEEDBACK -->
+  <section id="screen-player-feedback" class="screen">
+    <main class="feedback">
+      <div id="fb-icon" class="fb-icon">✓</div>
+      <h2 id="fb-title">Correto!</h2>
+      <p id="fb-points">+0</p>
+      <p id="fb-rank">Aguardando ranking…</p>
+    </main>
+  </section>
+
+  <!-- FINAL -->
+  <section id="screen-final" class="screen">
+    <main class="final-panel">
+      <p class="eyebrow">Fim de jogo</p>
+      <h2>Pódio</h2>
+      <ol id="podium" class="podium"></ol>
+      <div class="final-actions">
+        <button type="button" class="btn btn-primary" data-action="go-home">Início</button>
+        <button type="button" class="btn btn-secondary" id="btn-replay">Jogar de novo</button>
+      </div>
+    </main>
+  </section>
+
+  <!-- SOLO PLAY -->
+  <section id="screen-solo" class="screen">
+    <header class="game-bar">
+      <span id="solo-progress">1 / 24</span>
+      <div class="timer-wrap">
+        <span id="solo-timer">30</span>
+      </div>
+      <span id="solo-score">0 pts</span>
+    </header>
+    <main class="solo-q">
+      <h2 id="solo-text">Pergunta</h2>
+      <div class="answer-grid" id="solo-answers"></div>
+    </main>
+  </section>
+
+  <section id="screen-solo-end" class="screen">
+    <main class="final-panel">
+      <p class="eyebrow">Modo solo</p>
+      <h2 id="solo-end-title">Resultado</h2>
+      <p id="solo-end-score" class="solo-end-score">0 / 0</p>
+      <div class="final-actions">
+        <button type="button" class="btn btn-primary" data-action="go-home">Início</button>
+        <button type="button" class="btn btn-secondary" id="btn-solo-again">Jogar de novo</button>
+      </div>
+    </main>
+  </section>
+
+  <div id="toast" class="toast hidden" role="status"></div>
+
+  <script src="data/quiz-nativo.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
