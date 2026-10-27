@@ -1,39 +1,49 @@
+import { initFirebase, getDb, getFirebaseAuth } from "./firebase.js";
+import { isFirebaseConfigured } from "./firebase-config.js";
+import {
+  collection,
+  doc,
+  setDoc,
+  getDoc,
+  updateDoc,
+  onSnapshot,
+  serverTimestamp,
+  deleteDoc,
+  getDocs
+} from "https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js";
+
 (() => {
   "use strict";
 
   const STORAGE_QUIZZES = "kahootinho_quizzes_v1";
-  const CHANNEL = "kahootinho_bus_v1";
-  const SESSION_KEY = "kahootinho_session_v1";
 
   const $ = (sel, root = document) => root.querySelector(sel);
   const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 
   const state = {
-    role: null, // host | player | solo
+    role: null,
     quiz: null,
     pin: null,
-    players: {}, // id -> { id, nick, score }
+    players: {},
     playerId: null,
     nick: null,
     questionIndex: -1,
-    answers: {}, // playerId -> answerIndex
+    answers: {},
     answerTimes: {},
     timer: null,
     timeLeft: 0,
     questionStartedAt: 0,
     editingId: null,
     lastQuizId: null,
-    answered: false
+    answered: false,
+    unsubRoom: null,
+    unsubPlayers: null,
+    unsubAnswers: null,
+    lastRoomStatus: null,
+    lastQuestionIndex: null,
+    revealing: false
   };
 
-  let bus = null;
-  try {
-    bus = new BroadcastChannel(CHANNEL);
-  } catch {
-    bus = null;
-  }
-
-  /* ---------- helpers ---------- */
   function showScreen(id) {
     $$(".screen").forEach((s) => s.classList.remove("active"));
     const el = document.getElementById(id);
@@ -45,7 +55,7 @@
     el.textContent = msg;
     el.classList.remove("hidden");
     clearTimeout(toast._t);
-    toast._t = setTimeout(() => el.classList.add("hidden"), 2600);
+    toast._t = setTimeout(() => el.classList.add("hidden"), 2800);
   }
 
   function uid() {
@@ -54,6 +64,14 @@
 
   function makePin() {
     return String(Math.floor(100000 + Math.random() * 900000));
+  }
+
+  function escapeHtml(s) {
+    return String(s)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
   }
 
   function loadCustomQuizzes() {
@@ -74,102 +92,65 @@
     return found ? structuredClone(found) : null;
   }
 
-  function broadcast(type, payload = {}) {
-    const msg = { type, pin: state.pin, ...payload, ts: Date.now() };
-    if (bus) bus.postMessage(msg);
-    // fallback same-tab / storage for browsers without BroadcastChannel sync across refresh
-    try {
-      localStorage.setItem(
-        SESSION_KEY,
-        JSON.stringify({ ...msg, _n: Math.random() })
-      );
-    } catch {
-      /* ignore */
-    }
+  function roomRef(pin) {
+    return doc(getDb(), "rooms", pin);
   }
 
-  function onBusMessage(msg) {
-    if (!msg || typeof msg !== "object") return;
-    if (state.pin && msg.pin && msg.pin !== state.pin) return;
-
-    switch (msg.type) {
-      case "join":
-        if (state.role !== "host") return;
-        if (!state.players[msg.playerId]) {
-          state.players[msg.playerId] = {
-            id: msg.playerId,
-            nick: msg.nick,
-            score: 0
-          };
-          renderLobbyPlayers();
-          broadcast("lobby", { players: state.players, quizTitle: state.quiz.title });
-          toast(`${msg.nick} entrou`);
-        }
-        break;
-      case "lobby":
-        if (state.role === "player") {
-          state.players = msg.players || {};
-        }
-        break;
-      case "start":
-        if (state.role === "player") {
-          state.quiz = msg.quiz;
-          state.questionIndex = -1;
-        }
-        break;
-      case "question":
-        if (state.role === "player") {
-          beginPlayerQuestion(msg.index, msg.timeLimit, msg.question);
-        }
-        break;
-      case "answer":
-        if (state.role === "host") {
-          state.answers[msg.playerId] = msg.answer;
-          state.answerTimes[msg.playerId] = msg.elapsed;
-          updateHostAnswerCount();
-        }
-        break;
-      case "reveal":
-        if (state.role === "player") {
-          showPlayerFeedback(msg);
-        }
-        break;
-      case "final":
-        if (state.role === "player") {
-          showFinal(msg.players);
-        }
-        break;
-      case "end":
-        if (state.role === "player") {
-          toast("Jogo encerrado pelo apresentador");
-          resetToHome();
-        }
-        break;
-      default:
-        break;
-    }
+  function playersCol(pin) {
+    return collection(getDb(), "rooms", pin, "players");
   }
 
-  if (bus) {
-    bus.onmessage = (e) => onBusMessage(e.data);
+  function answersCol(pin) {
+    return collection(getDb(), "rooms", pin, "answers");
   }
-  window.addEventListener("storage", (e) => {
-    if (e.key !== SESSION_KEY || !e.newValue) return;
-    try {
-      onBusMessage(JSON.parse(e.newValue));
-    } catch {
-      /* ignore */
+
+  function clearListeners() {
+    if (state.unsubRoom) state.unsubRoom();
+    if (state.unsubPlayers) state.unsubPlayers();
+    if (state.unsubAnswers) state.unsubAnswers();
+    state.unsubRoom = null;
+    state.unsubPlayers = null;
+    state.unsubAnswers = null;
+  }
+
+  async function ensureFirebase() {
+    if (!isFirebaseConfigured()) {
+      toast("Configure o Firebase em firebase-config.js");
+      throw new Error("Firebase não configurado");
     }
-  });
+    await initFirebase();
+    state.playerId = getFirebaseAuth().currentUser.uid;
+  }
+
+  function scoreFor(elapsedMs, timeLimit) {
+    const limit = timeLimit * 1000;
+    const ratio = Math.max(0, 1 - elapsedMs / limit);
+    return Math.round(500 + 500 * ratio);
+  }
+
+  function rankedPlayers() {
+    return Object.values(state.players).sort((a, b) => b.score - a.score);
+  }
 
   /* ---------- navigation ---------- */
-  function resetToHome() {
+  async function resetToHome() {
     clearInterval(state.timer);
+    if (state.role === "host" && state.pin) {
+      try {
+        await updateDoc(roomRef(state.pin), { status: "ended" });
+      } catch {
+        /* ignore */
+      }
+    }
+    clearListeners();
     state.role = null;
     state.quiz = null;
     state.pin = null;
     state.players = {};
     state.questionIndex = -1;
+    state.lastRoomStatus = null;
+    state.lastQuestionIndex = null;
+    state.revealing = false;
     showScreen("screen-home");
   }
 
@@ -178,30 +159,26 @@
     if (!btn) return;
     const action = btn.dataset.action;
     const map = {
-      "go-home": resetToHome,
+      "go-home": () => {
+        resetToHome();
+      },
       "go-create": () => openCreate(),
       "go-library": () => {
         renderLibrary();
         showScreen("screen-library");
       },
       "go-join": () => showScreen("screen-join"),
-      "play-native": () => askPlayMode(window.QUIZ_NATIVO.id),
+      "play-native": () => startHost(window.QUIZ_NATIVO.id),
       "host-native": () => startHost(window.QUIZ_NATIVO.id),
       "solo-native": () => startSolo(window.QUIZ_NATIVO.id),
       "end-game": () => {
-        if (state.role === "host") broadcast("end");
         resetToHome();
       }
     };
     if (map[action]) map[action]();
   });
 
-  function askPlayMode(quizId) {
-    // quick path: open library focus / host by default for classroom feel
-    startHost(quizId);
-  }
-
-  /* ---------- library ---------- */
+  /* ---------- library / create (local) ---------- */
   function renderLibrary() {
     const list = $("#custom-quiz-list");
     const empty = $("#library-empty");
@@ -239,7 +216,6 @@
     });
   }
 
-  /* ---------- create quiz ---------- */
   function openCreate(editId = null) {
     state.editingId = editId;
     const existing = editId ? getQuizById(editId) : null;
@@ -262,10 +238,9 @@
   function buildQuestionEditor(data) {
     const wrap = document.createElement("div");
     wrap.className = "q-editor";
-    const idx = $$(".q-editor").length + 1;
     wrap.innerHTML = `
       <div class="q-editor-head">
-        <strong>Pergunta ${idx}</strong>
+        <strong>Pergunta</strong>
         <button type="button" class="q-remove">Remover</button>
       </div>
       <label class="field">
@@ -357,27 +332,74 @@
     showScreen("screen-library");
   };
 
-  /* ---------- host flow ---------- */
-  function startHost(quizId) {
+  /* ---------- host (Firestore) ---------- */
+  async function startHost(quizId) {
     const quiz = getQuizById(quizId);
     if (!quiz || !quiz.questions?.length) {
       toast("Quiz inválido");
       return;
     }
+
+    try {
+      await ensureFirebase();
+    } catch {
+      return;
+    }
+
     clearInterval(state.timer);
+    clearListeners();
+
+    let pin = makePin();
+    for (let i = 0; i < 5; i++) {
+      const existing = await getDoc(roomRef(pin));
+      if (!existing.exists()) break;
+      pin = makePin();
+    }
+
+    const hostUid = getFirebaseAuth().currentUser.uid;
     state.role = "host";
     state.quiz = quiz;
     state.lastQuizId = quizId;
-    state.pin = makePin();
+    state.pin = pin;
     state.players = {};
     state.questionIndex = -1;
     state.answers = {};
+    state.revealing = false;
+    state.lastRoomStatus = "lobby";
+    state.lastQuestionIndex = null;
+
+    await setDoc(roomRef(pin), {
+      hostUid,
+      title: quiz.title,
+      status: "lobby",
+      questionIndex: -1,
+      questionTotal: quiz.questions.length,
+      timeLimit: quiz.timeLimit || 30,
+      questionStartedAt: null,
+      currentQuestion: null,
+      correctIndex: null,
+      createdAt: serverTimestamp()
+    });
+
     $("#lobby-title").textContent = quiz.title;
-    $("#lobby-pin").textContent = state.pin;
+    $("#lobby-pin").textContent = pin;
     renderLobbyPlayers();
     $("#btn-start-game").disabled = true;
     showScreen("screen-lobby");
-    broadcast("lobby", { players: state.players, quizTitle: quiz.title });
+
+    state.unsubPlayers = onSnapshot(playersCol(pin), (snap) => {
+      const next = {};
+      snap.forEach((d) => {
+        next[d.id] = { id: d.id, ...d.data() };
+      });
+      const prevCount = Object.keys(state.players).length;
+      state.players = next;
+      renderLobbyPlayers();
+      if (Object.keys(next).length > prevCount && state.lastRoomStatus === "lobby") {
+        const newest = Object.values(next).sort((a, b) => (b.joinedAt || 0) - (a.joinedAt || 0))[0];
+        if (newest) toast(`${newest.nick} entrou`);
+      }
+    });
   }
 
   function renderLobbyPlayers() {
@@ -388,37 +410,32 @@
     $("#btn-start-game").disabled = players.length === 0;
   }
 
-  function escapeHtml(s) {
-    return String(s)
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;");
+  $("#btn-start-game").onclick = async () => {
+    if (!Object.keys(state.players).length) return;
+    $("#btn-start-game").disabled = true;
+    try {
+      await nextHostQuestion();
+    } catch (err) {
+      console.error(err);
+      toast("Não foi possível iniciar");
+      $("#btn-start-game").disabled = false;
+    }
+  };
+
+  async function clearAnswers(pin) {
+    const snap = await getDocs(answersCol(pin));
+    await Promise.all(snap.docs.map((d) => deleteDoc(d.ref)));
   }
 
-  $("#btn-add-local-player").onclick = () => {
-    const nick = prompt("Apelido (jogador de teste no lobby):");
-    if (!nick || !nick.trim()) return;
-    const id = "local-" + uid();
-    state.players[id] = { id, nick: nick.trim().slice(0, 16), score: 0, local: true };
-    renderLobbyPlayers();
-    toast("Para responder de verdade, use outra aba em “Entrar com PIN”");
-  };
-
-  $("#btn-start-game").onclick = () => {
-    if (!Object.keys(state.players).length) return;
-    broadcast("start", { quiz: { ...state.quiz, questions: state.quiz.questions.map((q) => ({ text: q.text, answers: q.answers })) } });
-    nextHostQuestion();
-  };
-
-  function nextHostQuestion() {
+  async function nextHostQuestion() {
     clearInterval(state.timer);
+    state.revealing = false;
     state.questionIndex += 1;
     state.answers = {};
     state.answerTimes = {};
 
     if (state.questionIndex >= state.quiz.questions.length) {
-      finishHostGame();
+      await finishHostGame();
       return;
     }
 
@@ -426,6 +443,18 @@
     const timeLimit = state.quiz.timeLimit || 30;
     state.timeLeft = timeLimit;
     state.questionStartedAt = Date.now();
+    state.lastRoomStatus = "question";
+    state.lastQuestionIndex = state.questionIndex;
+
+    await clearAnswers(state.pin);
+    await updateDoc(roomRef(state.pin), {
+      status: "question",
+      questionIndex: state.questionIndex,
+      timeLimit,
+      questionStartedAt: state.questionStartedAt,
+      currentQuestion: { text: q.text, answers: q.answers },
+      correctIndex: null
+    });
 
     $("#hq-progress").textContent = `${state.questionIndex + 1} / ${state.quiz.questions.length}`;
     $("#hq-text").textContent = q.text;
@@ -434,10 +463,19 @@
     renderAnswerButtons($("#hq-answers"), q.answers, null, true);
     showScreen("screen-host-question");
 
-    broadcast("question", {
-      index: state.questionIndex,
-      timeLimit,
-      question: { text: q.text, answers: q.answers }
+    if (state.unsubAnswers) state.unsubAnswers();
+    state.unsubAnswers = onSnapshot(answersCol(state.pin), (snap) => {
+      const answers = {};
+      const times = {};
+      snap.forEach((d) => {
+        const data = d.data();
+        if (data.questionIndex !== state.questionIndex) return;
+        answers[d.id] = data.answer;
+        times[d.id] = data.elapsed;
+      });
+      state.answers = answers;
+      state.answerTimes = times;
+      updateHostAnswerCount();
     });
 
     state.timer = setInterval(() => {
@@ -454,7 +492,7 @@
     const n = Object.keys(state.answers).length;
     const total = Object.keys(state.players).length;
     $("#hq-answers-count").textContent = `${n} / ${total} respostas`;
-    if (n >= total && total > 0) {
+    if (n >= total && total > 0 && !state.revealing) {
       clearInterval(state.timer);
       revealHostQuestion();
     }
@@ -465,32 +503,35 @@
     revealHostQuestion();
   };
 
-  function scoreFor(elapsedMs, timeLimit) {
-    const limit = timeLimit * 1000;
-    const ratio = Math.max(0, 1 - elapsedMs / limit);
-    return Math.round(500 + 500 * ratio);
-  }
+  async function revealHostQuestion() {
+    if (state.revealing) return;
+    state.revealing = true;
+    clearInterval(state.timer);
 
-  function revealHostQuestion() {
     const q = state.quiz.questions[state.questionIndex];
     const timeLimit = state.quiz.timeLimit || 30;
 
+    const scoreUpdates = [];
     Object.entries(state.answers).forEach(([pid, ans]) => {
-      if (ans === q.correct) {
+      if (ans === q.correct && state.players[pid]) {
         const pts = scoreFor(state.answerTimes[pid] || timeLimit * 1000, timeLimit);
-        if (state.players[pid]) state.players[pid].score += pts;
+        state.players[pid].score += pts;
+        scoreUpdates.push(
+          updateDoc(doc(getDb(), "rooms", state.pin, "players", pid), {
+            score: state.players[pid].score
+          })
+        );
       }
     });
+    await Promise.all(scoreUpdates);
+
+    await updateDoc(roomRef(state.pin), {
+      status: "reveal",
+      correctIndex: q.correct
+    });
+    state.lastRoomStatus = "reveal";
 
     const ranking = rankedPlayers();
-    broadcast("reveal", {
-      index: state.questionIndex,
-      correct: q.correct,
-      answers: state.answers,
-      players: state.players,
-      ranking
-    });
-
     $("#reveal-text").textContent = q.text;
     $("#reveal-status").textContent = "Resposta correta";
     renderAnswerButtons($("#reveal-answers"), q.answers, q.correct, true);
@@ -500,16 +541,21 @@
     showScreen("screen-reveal");
   }
 
-  $("#btn-next-question").onclick = () => nextHostQuestion();
+  $("#btn-next-question").onclick = () => {
+    nextHostQuestion().catch((err) => {
+      console.error(err);
+      toast("Erro ao avançar");
+    });
+  };
 
-  function finishHostGame() {
-    const ranking = rankedPlayers();
-    broadcast("final", { players: state.players });
+  async function finishHostGame() {
+    await updateDoc(roomRef(state.pin), {
+      status: "final",
+      currentQuestion: null,
+      correctIndex: null
+    });
+    state.lastRoomStatus = "final";
     showFinal(state.players);
-  }
-
-  function rankedPlayers() {
-    return Object.values(state.players).sort((a, b) => b.score - a.score);
   }
 
   function renderLeaderboard(el, ranking) {
@@ -545,8 +591,8 @@
     else resetToHome();
   };
 
-  /* ---------- player flow ---------- */
-  $("#btn-join-game").onclick = () => {
+  /* ---------- player (Firestore) ---------- */
+  $("#btn-join-game").onclick = async () => {
     const pin = $("#join-pin").value.trim();
     const nick = $("#join-nick").value.trim().slice(0, 16);
     if (!/^\d{6}$/.test(pin)) {
@@ -557,40 +603,141 @@
       toast("Informe um apelido");
       return;
     }
+
+    try {
+      await ensureFirebase();
+    } catch {
+      return;
+    }
+
+    const roomSnap = await getDoc(roomRef(pin));
+    if (!roomSnap.exists()) {
+      toast("Sala não encontrada. Confira o PIN.");
+      return;
+    }
+    const room = roomSnap.data();
+    if (room.status !== "lobby") {
+      toast("Este jogo já começou ou terminou");
+      return;
+    }
+
+    clearListeners();
     state.role = "player";
     state.pin = pin;
     state.nick = nick;
-    state.playerId = uid();
+    state.playerId = getFirebaseAuth().currentUser.uid;
     state.answered = false;
+    state.quiz = {
+      title: room.title,
+      timeLimit: room.timeLimit,
+      questions: Array(room.questionTotal).fill(null)
+    };
+    state.lastRoomStatus = "lobby";
+    state.lastQuestionIndex = null;
+
+    await setDoc(doc(getDb(), "rooms", pin, "players", state.playerId), {
+      nick,
+      score: 0,
+      joinedAt: Date.now()
+    });
+
     $("#waiting-nick").textContent = `Olá, ${nick}!`;
     showScreen("screen-waiting");
-    broadcast("join", { playerId: state.playerId, nick });
+
+    state.unsubPlayers = onSnapshot(playersCol(pin), (snap) => {
+      const next = {};
+      snap.forEach((d) => {
+        next[d.id] = { id: d.id, ...d.data() };
+      });
+      state.players = next;
+    });
+
+    state.unsubRoom = onSnapshot(roomRef(pin), (snap) => {
+      if (!snap.exists()) {
+        toast("Sala encerrada");
+        resetToHome();
+        return;
+      }
+      handlePlayerRoomUpdate(snap.data());
+    });
   };
 
-  function beginPlayerQuestion(index, timeLimit, question) {
+  function handlePlayerRoomUpdate(room) {
+    if (room.status === "ended") {
+      toast("Jogo encerrado pelo apresentador");
+      resetToHome();
+      return;
+    }
+
+    if (room.status === "question") {
+      const changed =
+        state.lastRoomStatus !== "question" ||
+        state.lastQuestionIndex !== room.questionIndex;
+      state.lastRoomStatus = "question";
+      state.lastQuestionIndex = room.questionIndex;
+      if (changed && room.currentQuestion) {
+        beginPlayerQuestion(
+          room.questionIndex,
+          room.timeLimit || 30,
+          room.currentQuestion,
+          room.questionStartedAt,
+          room.questionTotal
+        );
+      }
+      return;
+    }
+
+    if (room.status === "reveal") {
+      if (state.lastRoomStatus !== "reveal" || state.lastQuestionIndex !== room.questionIndex) {
+        state.lastRoomStatus = "reveal";
+        state.lastQuestionIndex = room.questionIndex;
+        showPlayerFeedbackFromRoom(room);
+      }
+      return;
+    }
+
+    if (room.status === "final") {
+      state.lastRoomStatus = "final";
+      showFinal(state.players);
+    }
+  }
+
+  function beginPlayerQuestion(index, timeLimit, question, startedAt, total) {
     state.questionIndex = index;
     state.answered = false;
-    state.timeLeft = timeLimit;
-    state.questionStartedAt = Date.now();
-    $("#pa-progress").textContent = `${index + 1} / ${(state.quiz?.questions || []).length || "?"}`;
-    $("#pa-timer").textContent = String(timeLimit);
+    const elapsedAlready = startedAt ? Math.max(0, Date.now() - startedAt) : 0;
+    state.timeLeft = Math.max(0, Math.ceil((timeLimit * 1000 - elapsedAlready) / 1000));
+    state.questionStartedAt = startedAt || Date.now();
+
+    $("#pa-progress").textContent = `${index + 1} / ${total || "?"}`;
+    $("#pa-timer").textContent = String(state.timeLeft);
     $("#pa-locked").classList.add("hidden");
+
     const box = $("#pa-answers");
-    renderAnswerButtons(box, question.answers, null, false, (i) => {
+    renderAnswerButtons(box, question.answers, null, false, async (i) => {
       if (state.answered) return;
       state.answered = true;
       const elapsed = Date.now() - state.questionStartedAt;
-      broadcast("answer", {
-        playerId: state.playerId,
-        answer: i,
-        elapsed
-      });
+      try {
+        await setDoc(doc(getDb(), "rooms", state.pin, "answers", state.playerId), {
+          questionIndex: index,
+          answer: i,
+          elapsed,
+          at: Date.now()
+        });
+      } catch (err) {
+        console.error(err);
+        state.answered = false;
+        toast("Falha ao enviar resposta");
+        return;
+      }
       $$(".answer-btn", box).forEach((b) => {
         b.disabled = true;
         if (Number(b.dataset.i) !== i) b.classList.add("dim");
       });
       $("#pa-locked").classList.remove("hidden");
     });
+
     showScreen("screen-player-answer");
     clearInterval(state.timer);
     state.timer = setInterval(() => {
@@ -600,12 +747,23 @@
     }, 1000);
   }
 
-  function showPlayerFeedback(msg) {
+  async function showPlayerFeedbackFromRoom(room) {
     clearInterval(state.timer);
-    const myAns = msg.answers?.[state.playerId];
-    const ok = myAns === msg.correct;
-    const me = msg.players?.[state.playerId];
-    const rank = (msg.ranking || []).findIndex((p) => p.id === state.playerId) + 1;
+    let myAns = null;
+    try {
+      const ansSnap = await getDoc(doc(getDb(), "rooms", state.pin, "answers", state.playerId));
+      if (ansSnap.exists() && ansSnap.data().questionIndex === room.questionIndex) {
+        myAns = ansSnap.data().answer;
+      }
+    } catch {
+      /* ignore */
+    }
+
+    const ok = myAns != null && myAns === room.correctIndex;
+    const me = state.players[state.playerId];
+    const ranking = rankedPlayers();
+    const rank = ranking.findIndex((p) => p.id === state.playerId) + 1;
+
     $("#fb-icon").className = `fb-icon ${ok ? "ok" : "bad"}`;
     $("#fb-icon").textContent = ok ? "✓" : "✗";
     $("#fb-title").textContent = myAns == null ? "Sem resposta" : ok ? "Correto!" : "Incorreto";
@@ -614,7 +772,7 @@
     showScreen("screen-player-feedback");
   }
 
-  /* ---------- solo ---------- */
+  /* ---------- solo (offline) ---------- */
   function startSolo(quizId) {
     const quiz = getQuizById(quizId);
     if (!quiz) {
@@ -622,6 +780,7 @@
       return;
     }
     clearInterval(state.timer);
+    clearListeners();
     state.role = "solo";
     state.quiz = quiz;
     state.lastQuizId = quizId;
@@ -659,9 +818,7 @@
       clearInterval(state.timer);
       const elapsed = Date.now() - state.questionStartedAt;
       const ok = i === q.correct;
-      if (ok) {
-        state.players.solo.score += scoreFor(elapsed, timeLimit);
-      }
+      if (ok) state.players.solo.score += scoreFor(elapsed, timeLimit);
       $$("#solo-answers .answer-btn").forEach((b) => {
         b.disabled = true;
         const bi = Number(b.dataset.i);
@@ -695,7 +852,6 @@
     if (state.lastQuizId) startSolo(state.lastQuizId);
   };
 
-  /* ---------- shared UI ---------- */
   function renderAnswerButtons(container, answers, correctIndex, showText, onPick) {
     container.innerHTML = "";
     answers.forEach((text, i) => {
@@ -704,24 +860,23 @@
       btn.className = "answer-btn";
       btn.dataset.i = String(i);
       btn.innerHTML = `<span class="shape" aria-hidden="true"></span><span class="label"></span>`;
-      btn.querySelector(".label").textContent = showText || onPick ? text : "";
-      if (!showText && !onPick) {
-        btn.querySelector(".label").textContent = text;
-      }
+      btn.querySelector(".label").textContent = showText || onPick ? text : text;
       if (correctIndex != null) {
         btn.disabled = true;
         if (i === correctIndex) btn.classList.add("correct");
         else btn.classList.add("wrong");
       }
-      if (onPick) {
-        btn.onclick = () => onPick(i);
-      } else {
-        btn.disabled = true;
-      }
+      if (onPick) btn.onclick = () => onPick(i);
+      else btn.disabled = true;
       container.appendChild(btn);
     });
   }
 
   // boot
   showScreen("screen-home");
+  if (!isFirebaseConfigured()) {
+    setTimeout(() => {
+      toast("Falta configurar o Firebase (firebase-config.js)");
+    }, 600);
+  }
 })();

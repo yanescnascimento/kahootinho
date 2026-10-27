@@ -38,7 +38,7 @@
           Entrar com PIN
         </button>
       </div>
-      <p class="native-hint">Quiz nativo: 24 questões · tempo sugerido 30s</p>
+      <p class="native-hint">Quiz nativo: 24 questões · multiplayer via Firestore</p>
     </main>
   </section>
 
@@ -108,7 +108,7 @@
         <input id="join-nick" type="text" maxlength="16" placeholder="Ex.: Ana" />
       </label>
       <button type="button" class="btn btn-primary" id="btn-join-game">Entrar</button>
-      <p class="hint">Abra outra aba no mesmo computador para apresentar e jogar juntos (modo local).</p>
+      <p class="hint">Use o PIN do apresentador. Funciona em qualquer celular ou computador (via Firebase).</p>
     </main>
   </section>
 
@@ -123,7 +123,7 @@
       <div class="pin-box">
         <p>PIN do jogo</p>
         <p class="pin-code" id="lobby-pin">------</p>
-        <p class="hint">Jogadores entram em “Entrar com PIN” nesta mesma máquina/navegador.</p>
+        <p class="hint">Compartilhe o PIN. Os nomes aparecem aqui quando alguém entrar pelo celular ou outro PC.</p>
       </div>
       <div class="players-box">
         <h3>Jogadores (<span id="player-count">0</span>)</h3>
@@ -131,7 +131,6 @@
       </div>
       <div class="lobby-actions">
         <button type="button" class="btn btn-primary" id="btn-start-game" disabled>Iniciar</button>
-        <button type="button" class="btn btn-ghost" id="btn-add-local-player">Adicionar jogador local</button>
       </div>
     </main>
   </section>
@@ -243,6 +242,6 @@
   <div id="toast" class="toast hidden" role="status"></div>
 
   <script src="data/quiz-nativo.js"></script>
-  <script src="app.js"></script>
+  <script type="module" src="app.js"></script>
 </body>
 </html>
