@@ -34,7 +34,13 @@ export async function initFirebase() {
     db = getFirestore(app);
 
     if (!auth.currentUser) {
-      await signInAnonymously(auth);
+      try {
+        await signInAnonymously(auth);
+      } catch (err) {
+        // permite nova tentativa depois de ativar Anonymous no Console
+        readyPromise = null;
+        throw err;
+      }
     }
 
     return { app, auth, db };

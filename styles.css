@@ -13,6 +13,7 @@
   --a1: #3498db;
   --a2: #f1c40f;
   --a3: #2ecc71;
+  --a4: #e67e22;
   --radius: 16px;
   --shadow: 0 18px 50px rgba(0, 0, 0, 0.35);
   --font: "Outfit", system-ui, sans-serif;
@@ -286,6 +287,85 @@ body {
 
 .hidden {
   display: none !important;
+}
+
+.import-box {
+  background: var(--surface);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--radius);
+  padding: 1rem 1.1rem;
+  margin-bottom: 1.25rem;
+}
+
+.import-title {
+  margin: 0 0 0.65rem;
+  font-weight: 700;
+}
+
+.import-steps {
+  margin: 0 0 1rem;
+  padding-left: 1.2rem;
+  color: var(--muted);
+  font-size: 0.92rem;
+  line-height: 1.45;
+}
+
+.import-steps li {
+  margin-bottom: 0.35rem;
+}
+
+.import-steps strong {
+  color: var(--text);
+}
+
+.template-preview {
+  overflow-x: auto;
+  margin-bottom: 1rem;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.template-preview table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.78rem;
+  min-width: 760px;
+}
+
+.template-preview th,
+.template-preview td {
+  padding: 0.55rem 0.6rem;
+  text-align: left;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  vertical-align: top;
+}
+
+.template-preview th {
+  background: rgba(46, 196, 182, 0.14);
+  color: var(--accent);
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.template-preview td {
+  color: var(--muted);
+}
+
+.template-preview tr:last-child td {
+  border-bottom: none;
+}
+
+.import-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.file-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
 }
 
 .create-panel .field,
@@ -569,6 +649,18 @@ body {
 
 .answer-btn[data-i="3"] { background: var(--a3); }
 .answer-btn[data-i="3"] .shape { clip-path: polygon(25% 0%, 75% 0%, 100% 50%, 75% 100%, 25% 100%, 0% 50%); }
+
+.answer-btn[data-i="4"] { background: var(--a4); }
+.answer-btn[data-i="4"] .shape {
+  clip-path: polygon(50% 0%, 100% 38%, 82% 100%, 18% 100%, 0% 38%);
+}
+
+.answer-grid .answer-btn:nth-child(5) {
+  grid-column: 1 / -1;
+  max-width: min(100%, 420px);
+  justify-self: center;
+  width: 100%;
+}
 
 .answer-btn.correct {
   outline: 3px solid #fff;

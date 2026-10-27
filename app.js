@@ -16,6 +16,8 @@ import {
   "use strict";
 
   const STORAGE_QUIZZES = "kahootinho_quizzes_v1";
+  const ANSWER_COUNT = 5;
+  const ANSWER_LETTERS = ["A", "B", "C", "D", "E"];
 
   const $ = (sel, root = document) => root.querySelector(sel);
   const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
@@ -86,10 +88,28 @@ import {
     localStorage.setItem(STORAGE_QUIZZES, JSON.stringify(list));
   }
 
+  function normalizeQuestion(q) {
+    const answers = [...(q.answers || [])];
+    while (answers.length < ANSWER_COUNT) answers.push("Nenhuma das anteriores");
+    return {
+      ...q,
+      answers: answers.slice(0, ANSWER_COUNT),
+      correct: Math.min(Math.max(0, Number(q.correct) || 0), ANSWER_COUNT - 1)
+    };
+  }
+
+  function normalizeQuiz(quiz) {
+    if (!quiz) return null;
+    return {
+      ...quiz,
+      questions: (quiz.questions || []).map(normalizeQuestion)
+    };
+  }
+
   function getQuizById(id) {
-    if (id === window.QUIZ_NATIVO.id) return structuredClone(window.QUIZ_NATIVO);
+    if (id === window.QUIZ_NATIVO.id) return normalizeQuiz(structuredClone(window.QUIZ_NATIVO));
     const found = loadCustomQuizzes().find((q) => q.id === id);
-    return found ? structuredClone(found) : null;
+    return found ? normalizeQuiz(structuredClone(found)) : null;
   }
 
   function roomRef(pin) {
@@ -118,8 +138,28 @@ import {
       toast("Configure o Firebase em firebase-config.js");
       throw new Error("Firebase não configurado");
     }
-    await initFirebase();
-    state.playerId = getFirebaseAuth().currentUser.uid;
+    try {
+      await initFirebase();
+    } catch (err) {
+      console.error(err);
+      const code = err?.code || "";
+      if (
+        code.includes("operation-not-allowed") ||
+        code.includes("admin-restricted-operation") ||
+        String(err?.message || "").toLowerCase().includes("operation")
+      ) {
+        toast("Ative Authentication → Anonymous no Firebase Console");
+      } else {
+        toast("Falha no login Firebase. Veja o console (F12).");
+      }
+      throw err;
+    }
+    const user = getFirebaseAuth().currentUser;
+    if (!user) {
+      toast("Não foi possível autenticar no Firebase");
+      throw new Error("Sem usuário Firebase");
+    }
+    state.playerId = user.uid;
   }
 
   function scoreFor(elapsedMs, timeLimit) {
@@ -216,7 +256,7 @@ import {
     });
   }
 
-  function openCreate(editId = null) {
+  function openCreate(editId = null, seedQuestions = null) {
     state.editingId = editId;
     const existing = editId ? getQuizById(editId) : null;
     $("#quiz-title").value = existing?.title || "";
@@ -224,15 +264,257 @@ import {
     $("#quiz-time").value = existing?.timeLimit || 30;
     const editor = $("#questions-editor");
     editor.innerHTML = "";
-    const qs = existing?.questions?.length
-      ? existing.questions
-      : [blankQuestion(), blankQuestion()];
+    const qs = seedQuestions?.length
+      ? seedQuestions
+      : existing?.questions?.length
+        ? existing.questions
+        : [blankQuestion(), blankQuestion()];
     qs.forEach((q) => editor.appendChild(buildQuestionEditor(q)));
+    renumberEditors();
+    const fileInput = $("#import-csv");
+    if (fileInput) fileInput.value = "";
     showScreen("screen-create");
   }
 
+  function detectCsvDelimiter(text) {
+    const firstDataLine =
+      text
+        .replace(/^\uFEFF/, "")
+        .split(/\r?\n/)
+        .map((l) => l.trim())
+        .find((l) => l && !l.startsWith("#")) || "";
+    const semis = (firstDataLine.match(/;/g) || []).length;
+    const commas = (firstDataLine.match(/,/g) || []).length;
+    return semis >= commas ? ";" : ",";
+  }
+
+  function parseCsv(text, delimiter = ",") {
+    const rows = [];
+    let row = [];
+    let cell = "";
+    let inQuotes = false;
+    const src = text.replace(/^\uFEFF/, "");
+
+    for (let i = 0; i < src.length; i++) {
+      const ch = src[i];
+      const next = src[i + 1];
+      if (inQuotes) {
+        if (ch === '"' && next === '"') {
+          cell += '"';
+          i++;
+        } else if (ch === '"') {
+          inQuotes = false;
+        } else {
+          cell += ch;
+        }
+        continue;
+      }
+      if (ch === '"') {
+        inQuotes = true;
+      } else if (ch === delimiter) {
+        row.push(cell);
+        cell = "";
+      } else if (ch === "\n") {
+        row.push(cell);
+        rows.push(row);
+        row = [];
+        cell = "";
+      } else if (ch === "\r") {
+        /* ignore */
+      } else {
+        cell += ch;
+      }
+    }
+    if (cell.length || row.length) {
+      row.push(cell);
+      rows.push(row);
+    }
+    return rows;
+  }
+
+  function buildTemplateCsv() {
+    const header = [
+      "pergunta",
+      "alternativa_a",
+      "alternativa_b",
+      "alternativa_c",
+      "alternativa_d",
+      "alternativa_e",
+      "gabarito"
+    ];
+    const examples = [
+      [
+        "Qual ação deve acontecer antes de abrir um gabinete?",
+        "Desligar e desconectar da tomada",
+        "Aumentar a velocidade do cooler",
+        "Formatar o SSD",
+        "Atualizar o navegador",
+        "Nenhuma das anteriores",
+        "A"
+      ],
+      [
+        "Qual memória perde os dados quando falta energia?",
+        "SSD",
+        "HDD",
+        "Pendrive",
+        "RAM",
+        "Nenhuma das anteriores",
+        "D"
+      ],
+      [
+        "O que significa POST na inicialização?",
+        "Teste inicial de hardware",
+        "Formatação completa",
+        "Instalação de driver",
+        "Criptografia de arquivos",
+        "Nenhuma das anteriores",
+        "A"
+      ]
+    ];
+    const lines = [header, ...examples].map((cols) =>
+      cols.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(";")
+    );
+    // BOM ajuda o Excel a abrir UTF-8 com acentos e ; separa colunas no Excel BR
+    return `\uFEFF${lines.join("\r\n")}\r\n`;
+  }
+
+  function downloadTemplateCsv() {
+    const blob = new Blob([buildTemplateCsv()], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "kahootinho-template-quiz.csv";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    toast("Template baixado. Abra no Excel e preencha as colunas.");
+  }
+
+  $("#btn-download-template")?.addEventListener("click", downloadTemplateCsv);
+
+  function normalizeHeader(h) {
+    return String(h || "")
+      .trim()
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/\s+/g, "_");
+  }
+
+  function parseGabarito(value) {
+    const v = String(value || "").trim().toUpperCase();
+    if (/^[A-E]$/.test(v)) return v.charCodeAt(0) - 65;
+    if (/^[1-5]$/.test(v)) return Number(v) - 1;
+    return -1;
+  }
+
+  function questionsFromCsv(text) {
+    const delimiter = detectCsvDelimiter(text);
+    const rows = parseCsv(text, delimiter).filter((r) => {
+      const first = String(r[0] || "").trim();
+      if (!first || first.startsWith("#")) return false;
+      return true;
+    });
+    if (rows.length < 2) {
+      throw new Error("CSV vazio ou sem dados. Use o template.");
+    }
+
+    const headers = rows[0].map(normalizeHeader);
+    const idx = {
+      pergunta: headers.findIndex((h) =>
+        ["pergunta", "enunciado", "questao", "question"].includes(h)
+      ),
+      a: headers.findIndex((h) =>
+        ["alternativa_a", "alternativaa", "a", "opcao_a", "opcaoa"].includes(h)
+      ),
+      b: headers.findIndex((h) =>
+        ["alternativa_b", "alternativab", "b", "opcao_b", "opcaob"].includes(h)
+      ),
+      c: headers.findIndex((h) =>
+        ["alternativa_c", "alternativac", "c", "opcao_c", "opcaoc"].includes(h)
+      ),
+      d: headers.findIndex((h) =>
+        ["alternativa_d", "alternativad", "d", "opcao_d", "opcaod"].includes(h)
+      ),
+      e: headers.findIndex((h) =>
+        ["alternativa_e", "alternativae", "e", "opcao_e", "opcaoe"].includes(h)
+      ),
+      gabarito: headers.findIndex((h) =>
+        ["gabarito", "correta", "resposta", "answer", "correct"].includes(h)
+      )
+    };
+
+    if (
+      idx.pergunta < 0 ||
+      idx.a < 0 ||
+      idx.b < 0 ||
+      idx.c < 0 ||
+      idx.d < 0 ||
+      idx.e < 0 ||
+      idx.gabarito < 0
+    ) {
+      throw new Error(
+        "Cabeçalhos inválidos. Use: pergunta, alternativa_a ... alternativa_e, gabarito"
+      );
+    }
+
+    const questions = [];
+    for (let i = 1; i < rows.length; i++) {
+      const r = rows[i];
+      const textQ = String(r[idx.pergunta] || "").trim();
+      if (!textQ) continue;
+      const answers = [
+        String(r[idx.a] || "").trim(),
+        String(r[idx.b] || "").trim(),
+        String(r[idx.c] || "").trim(),
+        String(r[idx.d] || "").trim(),
+        String(r[idx.e] || "").trim()
+      ];
+      if (answers.some((a) => !a)) {
+        throw new Error(`Linha ${i + 1}: preencha as 5 alternativas (A–E).`);
+      }
+      const correct = parseGabarito(r[idx.gabarito]);
+      if (correct < 0) {
+        throw new Error(`Linha ${i + 1}: gabarito deve ser A, B, C, D ou E.`);
+      }
+      questions.push({ text: textQ, answers, correct });
+    }
+
+    if (!questions.length) {
+      throw new Error("Nenhuma pergunta válida encontrada no CSV.");
+    }
+    return questions;
+  }
+
+  function fillQuestionsEditor(questions) {
+    const editor = $("#questions-editor");
+    editor.innerHTML = "";
+    questions.forEach((q) => editor.appendChild(buildQuestionEditor(q)));
+    renumberEditors();
+  }
+
+  $("#import-csv")?.addEventListener("change", async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const questions = questionsFromCsv(text);
+      fillQuestionsEditor(questions);
+      if (!$("#quiz-title").value.trim()) {
+        $("#quiz-title").value = file.name.replace(/\.csv$/i, "").slice(0, 120);
+      }
+      toast(`${questions.length} pergunta(s) importada(s). Revise e salve.`);
+    } catch (err) {
+      console.error(err);
+      toast(err.message || "Falha ao importar CSV");
+    } finally {
+      e.target.value = "";
+    }
+  });
+
   function blankQuestion() {
-    return { text: "", answers: ["", "", "", ""], correct: 0 };
+    return { text: "", answers: Array(ANSWER_COUNT).fill(""), correct: 0 };
   }
 
   function buildQuestionEditor(data) {
@@ -251,12 +533,12 @@ import {
     `;
     wrap.querySelector(".q-text").value = data.text || "";
     const answersBox = wrap.querySelector(".q-answers");
-    for (let i = 0; i < 4; i++) {
+    for (let i = 0; i < ANSWER_COUNT; i++) {
       const row = document.createElement("label");
       row.className = "answer-edit";
       row.innerHTML = `
         <input type="radio" name="correct-${uid()}" value="${i}" ${data.correct === i ? "checked" : ""} />
-        <input type="text" class="a-text" maxlength="160" placeholder="Alternativa ${String.fromCharCode(65 + i)}" />
+        <input type="text" class="a-text" maxlength="160" placeholder="Alternativa ${ANSWER_LETTERS[i]}" />
       `;
       row.querySelector(".a-text").value = data.answers?.[i] || "";
       answersBox.appendChild(row);
@@ -298,8 +580,8 @@ import {
       const answers = [...ed.querySelectorAll(".a-text")].map((i) => i.value.trim());
       const radio = ed.querySelector('input[type="radio"]:checked');
       const correct = radio ? Number(radio.value) : 0;
-      if (!text || answers.some((a) => !a)) {
-        toast("Preencha enunciado e 4 alternativas em todas as perguntas");
+      if (!text || answers.length !== ANSWER_COUNT || answers.some((a) => !a)) {
+        toast("Preencha enunciado e 5 alternativas (A–E) em todas as perguntas");
         return;
       }
       questions.push({ text, answers, correct });

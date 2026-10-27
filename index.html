@@ -29,7 +29,7 @@
           Jogar quiz nativo
         </button>
         <button type="button" class="btn btn-secondary" data-action="go-create">
-          Criar manualmente
+          Criar / importar quiz
         </button>
         <button type="button" class="btn btn-ghost" data-action="go-library">
           Meus quizzes
@@ -74,6 +74,48 @@
       <button type="button" class="btn btn-sm btn-primary" id="btn-save-quiz">Salvar</button>
     </header>
     <main class="panel create-panel">
+      <div class="import-box">
+        <p class="import-title">Importar questionário (Excel)</p>
+        <ol class="import-steps">
+          <li>Baixe o template (abre com colunas no Excel).</li>
+          <li>Preencha <strong>uma linha por pergunta</strong>.</li>
+          <li>Na coluna <strong>gabarito</strong>, use só <strong>A</strong>, <strong>B</strong>, <strong>C</strong>, <strong>D</strong> ou <strong>E</strong>.</li>
+          <li>Salve o arquivo e clique em <strong>Importar CSV</strong>.</li>
+        </ol>
+        <div class="template-preview" aria-label="Exemplo das colunas">
+          <table>
+            <thead>
+              <tr>
+                <th>pergunta</th>
+                <th>alternativa_a</th>
+                <th>alternativa_b</th>
+                <th>alternativa_c</th>
+                <th>alternativa_d</th>
+                <th>alternativa_e</th>
+                <th>gabarito</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Qual memória perde dados sem energia?</td>
+                <td>SSD</td>
+                <td>HDD</td>
+                <td>Pendrive</td>
+                <td>RAM</td>
+                <td>Nenhuma das anteriores</td>
+                <td>D</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="import-actions">
+          <button type="button" class="btn btn-secondary btn-sm" id="btn-download-template">Baixar template Excel</button>
+          <label class="btn btn-ghost btn-sm file-btn">
+            Importar CSV
+            <input type="file" id="import-csv" accept=".csv,text/csv,.txt" hidden />
+          </label>
+        </div>
+      </div>
       <label class="field">
         <span>Título</span>
         <input id="quiz-title" type="text" maxlength="120" placeholder="Ex.: Redes e TCP/IP" />
